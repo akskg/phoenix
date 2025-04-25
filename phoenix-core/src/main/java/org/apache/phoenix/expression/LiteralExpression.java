@@ -35,6 +35,8 @@ import org.apache.phoenix.schema.types.PBoolean;
 import org.apache.phoenix.schema.types.PChar;
 import org.apache.phoenix.schema.types.PDataType;
 import org.apache.phoenix.schema.types.PDate;
+import org.apache.phoenix.schema.types.PInteger;
+import org.apache.phoenix.schema.types.PLong;
 import org.apache.phoenix.schema.types.PTime;
 import org.apache.phoenix.schema.types.PTimestamp;
 import org.apache.phoenix.schema.types.PVarchar;
@@ -57,7 +59,9 @@ public class LiteralExpression extends BaseTerminalExpression {
 	private static final LiteralExpression[] NULL_EXPRESSIONS = new LiteralExpression[Determinism.values().length];
     private static final LiteralExpression[] TYPED_NULL_EXPRESSIONS = new LiteralExpression[PDataType.values().length * Determinism.values().length];
     private static final LiteralExpression[] BOOLEAN_EXPRESSIONS = new LiteralExpression[2 * Determinism.values().length];
-    
+    private static final LiteralExpression[][] LONG_1024_EXPRESSIONS = new LiteralExpression[Determinism.values().length][1024];
+    private static final LiteralExpression[][] INTEGER_1024_EXPRESSIONS = new LiteralExpression[Determinism.values().length][1024];
+
     static {
     	for (Determinism determinism : Determinism.values()) {
     		NULL_EXPRESSIONS[determinism.ordinal()] = new LiteralExpression(null, determinism);
@@ -67,6 +71,13 @@ public class LiteralExpression extends BaseTerminalExpression {
 	        BOOLEAN_EXPRESSIONS[determinism.ordinal()] = new LiteralExpression(Boolean.FALSE,
               PBoolean.INSTANCE, PBoolean.INSTANCE.toBytes(Boolean.FALSE), determinism);
 	        BOOLEAN_EXPRESSIONS[Determinism.values().length+determinism.ordinal()] = new LiteralExpression(Boolean.TRUE, PBoolean.INSTANCE, PBoolean.INSTANCE.toBytes(Boolean.TRUE), determinism);
+    	
+	        for (int i = 0; i < 1024; i ++) {
+	        	INTEGER_1024_EXPRESSIONS[determinism.ordinal()][i] = new LiteralExpression(i, PInteger.INSTANCE, PInteger.INSTANCE.toBytes(i), determinism);
+	        	
+	        	long longValue = Long.valueOf(i);
+	        	LONG_1024_EXPRESSIONS[determinism.ordinal()][i]=new LiteralExpression(longValue, PLong.INSTANCE, PLong.INSTANCE.toBytes(longValue), determinism);
+	        }
     	}
     }
     
@@ -88,6 +99,14 @@ public class LiteralExpression extends BaseTerminalExpression {
     
     private static LiteralExpression getBooleanLiteralExpression(Boolean bool, Determinism determinism){
     	return BOOLEAN_EXPRESSIONS[ (Boolean.FALSE.equals(bool) ?  0 : Determinism.values().length) + determinism.ordinal()];
+    }
+
+    private static LiteralExpression getInt1024LiteralExpression(int value, Determinism determinism){
+    	return INTEGER_1024_EXPRESSIONS[determinism.ordinal()][value];
+    }
+    
+    private static LiteralExpression getLong1024LiteralExpression(long value, Determinism determinism){
+    	return LONG_1024_EXPRESSIONS[determinism.ordinal()][(int)value];
     }
 
     public static boolean isFalse(Expression child) {
@@ -123,6 +142,16 @@ public class LiteralExpression extends BaseTerminalExpression {
         return newConstant(value, Determinism.ALWAYS);
     }
     
+    public static boolean isEmptyString(Object value) {
+    	if (value instanceof String) {
+    		if (((String) value).length() > 0) {
+    			return false;
+    		}
+    	}
+    	
+    	return false;
+    }
+    
     // TODO: cache?
     public static LiteralExpression newConstant(Object value, Determinism determinism) {
         if (value instanceof Boolean) {
@@ -130,7 +159,22 @@ public class LiteralExpression extends BaseTerminalExpression {
         }
         else if (value == null) {
             return getNullLiteralExpression(determinism);
+        } else if (isEmptyString(value)) {
+        	return getNullLiteralExpression(determinism);
+        } else if (value instanceof Integer) {
+        	int intValue = (int) value;
+        	if (intValue >= 0 && intValue < 1024) {
+        		// value between 0 ~ 1024 using cache
+            	return getInt1024LiteralExpression(intValue, determinism);	
+        	}
+        } else if (value instanceof Long) {
+        	long longValue = (long) value;
+        	if (longValue >= 0 && longValue < 1024) {
+        		// value between 0 ~ 1024 using cache
+            	return getLong1024LiteralExpression(longValue, determinism);	
+        	}
         }
+        
         PDataType type = PDataType.fromLiteral(value);
         byte[] b = type.toBytes(value);
         if (type.isNull(b)) {
@@ -182,7 +226,22 @@ public class LiteralExpression extends BaseTerminalExpression {
         }
         else if (value instanceof Boolean) {
             return getBooleanLiteralExpression((Boolean)value, determinism);
+        } else if (isEmptyString(value)) {
+        	return getTypedNullLiteralExpression(type, determinism);
+        } else if (type != null && type == PLong.INSTANCE) {
+        	long longValue = ((long) value);
+        	if (longValue >= 0 && longValue < 1024) {
+        		// value between 0 ~ 1024 using cache
+            	return getLong1024LiteralExpression(longValue, determinism);	
+        	}
+        } else if (type != null && type == PInteger.INSTANCE) {
+        	int intValue = (int) value;
+        	if (intValue >= 0 && intValue < 1024) {
+        		// value between 0 ~ 1024 using cache
+            	return getInt1024LiteralExpression(intValue, determinism);	
+        	}
         }
+        
         PDataType actualType = PDataType.fromLiteral(value);
         type = type == null ? actualType : type;
         try {
@@ -213,7 +272,7 @@ public class LiteralExpression extends BaseTerminalExpression {
         }
         return new LiteralExpression(value, type, b, maxLength, scale, sortOrder, determinism);
     }
-
+    
     public LiteralExpression() {
     }
     
